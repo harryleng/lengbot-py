@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# 环境变量（真实密码不进版本库）
+.env
+
+# 数据库 dump（7.9 MB，且含生产数据，别提交）
+db/*.dump
+
+# 生成物
+docs/API_TODO.md
+
+# 文件工具的工作区（模型可读写，属运行时产物）
+workspace/
+
+# 前端副本（从 lengbot-ui 复制，独立维护）
+# 源码要不要进库看你 —— 现在只忽略依赖和构建产物，源码保留
+ui/node_modules/
+ui/.vite-py/
+ui/dist/
+ui/dist-*/
+
+# IDE
+.idea/
+.vscode/

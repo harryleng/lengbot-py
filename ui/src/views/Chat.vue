@@ -1,0 +1,1085 @@
+<template>
+  <div class="chat-container">
+    <ChatTopBar
+      v-if="sessionId"
+      :session-title="sessionTitle"
+      :title-editing="titleEditing"
+      :title-edit-value="titleEditValue"
+      :show-file-drawer="!!sessionId"
+      :show-runtime-panel="!!sessionId"
+      :runtime-panel-open="sessionRuntimePanelOpen"
+      :show-subagent-drawer="!!sessionId"
+      :subagent-running-count="runningSubagentCount"
+      :title-editable="!!sessionId"
+      @start-title-edit="startTitleEdit"
+      @confirm-title-edit="confirmTitleEdit"
+      @cancel-title-edit="cancelTitleEdit"
+      @update:title-edit-value="titleEditValue = $event"
+      @open-file-drawer="openFileDrawer"
+      @toggle-runtime-panel="sessionRuntimePanelOpen = !sessionRuntimePanelOpen"
+      @open-subagent-drawer="subagentRuntimeOpen = true"
+    />
+
+    <div class="chat-workspace">
+      <div class="chat-primary">
+        <div ref="messagesRef" class="chat-messages">
+          <ChatWelcomeState
+            v-if="!sessionId && messages.length === 0 && !loadingHistory"
+            :welcome-message="currentWelcomeMessage"
+            :recommended-questions="currentRecommendedQuestions"
+            :selected-agent-id="selectedAgentId"
+            :agents-length="agents.length"
+            :loading="currentAgentLoading || agentsLoading"
+            @select-question="applyRecommendedQuestion"
+          />
+
+          <div v-if="loadingHistory" class="history-loading">
+            <LoadingOutlined spin class="history-loading-icon" />
+          </div>
+          <div
+            v-else
+            class="virtual-list-container"
+            :style="{ height: virtualizer.getTotalSize() + 'px', position: 'relative' }"
+          >
+            <div
+              v-for="virtualRow in virtualizer.getVirtualItems()"
+              :key="virtualRow.key"
+              :data-index="virtualRow.index"
+              :ref="
+                (el) => {
+                  if (el) virtualizer.measureElement(el)
+                }
+              "
+              :style="{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                width: '100%',
+                transform: `translateY(${virtualRow.start}px)`,
+              }"
+            >
+              <ChatMessageRow
+                :ref="(el) => setMessageRowComponentRef(virtualRow.index, el)"
+                :msg="messages[virtualRow.index]"
+                :index="virtualRow.index"
+                :loading="loading"
+                :streaming="streaming"
+                :editing-message-id="editingMessageId"
+                :edit-content="editContent"
+                :highlight-message-id="highlightMessageId"
+                :feedback-type="getMessageFeedbackType(messages[virtualRow.index])"
+                :can-regenerate="canRegenerate(virtualRow.index)"
+                :is-last-user-message="isLastUserMessage(virtualRow.index)"
+                :speaking-msg-key="speakingMsgKey"
+                :show-tts-btn="showTtsBtn"
+                :last-reply-elapsed="lastReplyElapsed"
+                :selected-agent-id="selectedAgentId"
+                :selected-agent-version-id="selectedAgentVersionId"
+                :get-att-thumb-url="getAttThumbUrl"
+                :messages="messages"
+                :messages-length="messages.length"
+                :refs-section-expanded="isRefsSectionExpanded(messages[virtualRow.index])"
+                :is-ref-expanded="(refIndex) => isReferenceExpanded(messages[virtualRow.index], refIndex)"
+                @update:edit-content="editContent = $event"
+                @cancel-edit="cancelEdit"
+                @submit-edit="submitEdit"
+                @scroll-to-reply="scrollToMessage"
+                @preview-attachment="onAttachmentPreview"
+                @height-change="onCapabilityHeightChange"
+                @copy="copyMessage(messages[virtualRow.index])"
+                @regenerate="regenerateReply(virtualRow.index)"
+                @edit="startEdit(virtualRow.index)"
+                @reply="startReply(virtualRow.index)"
+                @delete="handleDeleteMessage(virtualRow.index)"
+                @star="toggleStarMessage(virtualRow.index)"
+                @feedback-like="handleMessageFeedback(messages[virtualRow.index], 'like')"
+                @show-dislike="showDislikeModal(messages[virtualRow.index])"
+                @speak="speakMessage(messages[virtualRow.index], virtualRow.index)"
+                @view-raw="openRawModal(virtualRow.index)"
+                @copy-request-id="copyRequestId(messages[virtualRow.index])"
+                @copy-message-id="copyMessageId(messages[virtualRow.index])"
+                @workflow-confirm-submit="(formData) => submitWorkflowConfirm(messages[virtualRow.index], formData)"
+                @workflow-confirm-abandon="() => abandonWorkflowConfirm(messages[virtualRow.index])"
+                @rag-toggle="onRagToggle(virtualRow.index, $event)"
+                @reasoning-toggle="toggleReasoningExpand(virtualRow.index)"
+                @go-knowledge="({ knowledgeId, documentId }) => goToKnowledge(knowledgeId, documentId)"
+              />
+            </div>
+          </div>
+
+          <!-- 回复未终止（loading 为 true）时持续展示回复动画，位于 AI 回复内容下方 -->
+          <ChatStreamingPlaceholder
+            v-if="loading"
+            :status-text="streamingIndicatorText"
+            :status-badges="streamingSubagentBadges"
+          />
+        </div>
+
+        <ChatInputArea
+          ref="chatInputAreaRef"
+          v-model:input="input"
+          :loading="loading"
+          :can-send="canSend"
+          :workflow-confirm-blocked="workflowConfirmBlocked"
+          :ask-user-blocked="askUserModal.visible"
+          :switching-session="inputMaskLoading"
+          :agents="agents"
+          :selected-agent-id="selectedAgentId"
+          :selected-agent-version-id="selectedAgentVersionId"
+          :current-agent="currentAgent"
+          :config-version-options="configVersionOptions"
+          :selected-config-version="selectedConfigVersion"
+          :session-token-count="sessionTokenCount"
+          :show-file-upload-btn="showFileUploadBtn"
+          :file-upload-hint="fileUploadHint"
+          :image-upload-hint="imageUploadHint"
+          :file-accept-types="fileAcceptTypes"
+          :image-accept-types="imageAcceptTypes"
+          :document-accept-types="documentAcceptTypes"
+          :uploading="uploading"
+          :show-voice-input-btn="showVoiceInputBtn"
+          :voice-listening="voiceListening"
+          :reply-to="replyTo"
+          :pending-attachments="pendingAttachments"
+          :get-att-thumb-url="getAttThumbUrl"
+          :show-input-disclaimer="showInputDisclaimer"
+          :input-hint-questions="inputHintQuestions"
+          :question-rotate-index="questionRotateIndex"
+          @send="sendMessage"
+          @stop="stopGenerating"
+          @agent-select="handleAgentSelect"
+          @config-version-change="onConfigVersionChange"
+          @file-selected="onFileSelected"
+          @remove-attachment="removeAttachment"
+          @attachment-preview="onAttachmentPreview"
+          @toggle-voice="toggleVoiceInput"
+          @cancel-reply="cancelReply"
+          @apply-question="applyRecommendedQuestion"
+        />
+      </div>
+
+      <!-- 数字人面板：数字人型 agent 时，右侧展示会口播的数字人 -->
+      <DigitalHumanPlayer
+        v-if="isDigitalHumanAgent"
+        class="chat-digital-human"
+        :portrait-url="digitalHumanConfig?.portraitUrl"
+        :mouth-zone="digitalHumanConfig?.mouthZone"
+        :speaking="digitalHumanSpeaking"
+        :state="digitalHumanState"
+        :muted="dhMuted"
+        :agent-name="currentAgent?.name"
+        :engine-value="chatTtsProvider"
+        :engine-options="chatTtsProviders"
+        @toggle-mute="onToggleMute"
+        @stop="onStopBroadcast"
+        @update:engine="onChatEngineChange"
+      />
+
+      <ChatSessionRuntimePanel
+        v-if="sessionId && sessionRuntimePanelOpen"
+        :session-id="sessionId"
+        :messages="currentRequestMessages"
+        :live-events="liveSubagentEvents"
+        :task-ids="currentRequestSubagentTaskIds"
+        :parent-request-id="currentRequestId"
+        :width="sessionRuntimePanelWidth"
+        @open-files="openFileDrawer"
+        @preview-attachment="onAttachmentPreview"
+        @resize-start="startRuntimePanelResize"
+      />
+    </div>
+
+    <ChatAttachmentPreview v-model:open="attachmentPreviewOpen" :attachment="attachmentPreviewAtt" />
+
+    <ChatRawContentModal
+      v-model:open="rawModal.visible"
+      :title="rawModal.title"
+      :content="rawModal.content"
+      :copied="rawModal.copied"
+      :metadata="rawModal.metadata"
+      v-model:metadata-open="metadataModal.visible"
+      :metadata-json="metadataModal.json"
+      :metadata-copied="metadataModal.copied"
+      @copy-raw="copyRawContent"
+      @copy-metadata="copyMetadata"
+      @open-metadata="openMetadataModal"
+    />
+
+    <ChatAskUserModal
+      v-model:open="askUserModal.visible"
+      :questions="askUserModal.questions"
+      @submit="submitAskUserResponse"
+    />
+
+    <ChatFeedbackDislikeModal
+      v-model:open="dislikeModalVisible"
+      v-model:reason="dislikeReason"
+      @submit="submitDislikeReason"
+      @skip="skipDislikeReason"
+      @close="closeDislikeModal"
+    />
+
+    <ChatSessionFilesDrawer
+      v-model:open="fileDrawerOpen"
+      :session-id="sessionId"
+      :file-stats="fileStats"
+      :file-drawer-loading="fileDrawerLoading"
+      :file-tree-refresh-tick="fileTreeRefreshTick"
+      :tooltip-popup-container="tooltipPopupContainer"
+      @after-open-change="onFileDrawerOpened"
+      @refresh="refreshSessionFiles"
+      @preview="openSessionFilePreviewModal"
+      @refreshed="onFileTreeRefreshed"
+    />
+
+    <ChatSubAgentRuntimeDrawer
+      v-model:open="subagentRuntimeOpen"
+      :session-id="sessionId"
+      :live-events="liveSubagentEvents"
+    />
+
+    <SessionFilePreviewModal
+      v-model:open="sessionFilePreviewOpen"
+      :session-id="sessionId"
+      :file="sessionFilePreviewTarget"
+    />
+  </div>
+</template>
+
+<script setup>
+import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { LoadingOutlined } from '@ant-design/icons-vue'
+import ChatAttachmentPreview from '../components/ChatAttachmentPreview.vue'
+import SessionFilePreviewModal from '../components/SessionFilePreviewModal.vue'
+import ChatTopBar from '../components/chat/ChatTopBar.vue'
+import ChatWelcomeState from '../components/chat/ChatWelcomeState.vue'
+import ChatMessageRow from '../components/chat/message/ChatMessageRow.vue'
+import ChatInputArea from '../components/chat/input/ChatInputArea.vue'
+import ChatRawContentModal from '../components/chat/modals/ChatRawContentModal.vue'
+import ChatAskUserModal from '../components/chat/modals/ChatAskUserModal.vue'
+import ChatFeedbackDislikeModal from '../components/chat/modals/ChatFeedbackDislikeModal.vue'
+import ChatSessionFilesDrawer from '../components/chat/session/ChatSessionFilesDrawer.vue'
+import ChatSubAgentRuntimeDrawer from '../components/chat/session/ChatSubAgentRuntimeDrawer.vue'
+import ChatSessionRuntimePanel from '../components/chat/session/ChatSessionRuntimePanel.vue'
+import ChatStreamingPlaceholder from '../components/chat/session/ChatStreamingPlaceholder.vue'
+import DigitalHumanPlayer from '../components/DigitalHumanPlayer.vue'
+import { buildSubagentLiveStatusBadges } from '../components/capabilities/subagentEventUtils.js'
+import { useChatAgents } from '../composables/useChatAgents'
+import { useChatAttachments } from '../composables/useChatAttachments'
+import { useVoiceIO } from '../composables/useVoiceIO'
+import { useBackendTts } from '../composables/useBackendTts'
+import { useAskUser } from '../composables/useAskUser'
+import { useStreamSmoother } from '../composables/useStreamSmoother'
+import {
+  useChatSendGate,
+  createChatWorkflowStreamHandlers,
+  createChatCapabilityStreamHandlers,
+  useChatMessageModel,
+  useChatFeedback,
+  useChatRagRefs,
+  useChatInputHint,
+  useChatScroll,
+  useChatHistory,
+  useChatStream,
+  useChatMessageActions,
+  useChatSessionChrome,
+  getMsgRagRefs,
+  clearErrorRetry,
+} from '../composables/chat'
+
+const route = useRoute()
+const router = useRouter()
+
+const sessionId = computed(() => route.params.sessionId || null)
+
+const input = ref('')
+const inputHistory = ref([])
+const historyIndex = ref(-1)
+const loading = ref(false)
+const streaming = ref(false)
+const messages = ref([])
+const sessionTokenCount = ref(0)
+const messagesRef = ref(null)
+const inputRef = ref(null)
+const chatInputAreaRef = ref(null)
+const skipNextWatch = ref(false)
+const loadingHistory = ref(false)
+const currentStatus = ref('')
+const reconnecting = ref(false)
+const lastReplyElapsed = ref(null)
+const hasStreamContent = ref(false)
+const userStoppedStream = ref(false)
+const abortController = ref(null)
+const toolEvents = ref([])
+const pendingAttachments = ref([])
+const fileInputRef = ref(null)
+const uploading = ref(false)
+const attachmentPreviewOpen = ref(false)
+const attachmentPreviewAtt = ref(null)
+const voiceListening = ref(false)
+const speakingMsgKey = ref(null)
+const subagentRuntimeOpen = ref(false)
+const liveSubagentEvents = ref([])
+const sessionRuntimePanelOpen = ref(false)
+const sessionRuntimePanelWidth = ref(336)
+const currentRequestStartIndex = ref(null)
+let stopRuntimePanelResize = null
+
+/** 协作状态的待办/产物属于一轮用户任务，历史轮次只由各自消息与会话级抽屉承载。 */
+const currentRequestMessages = computed(() => {
+  if (currentRequestStartIndex.value !== null) {
+    return messages.value.slice(currentRequestStartIndex.value)
+  }
+  const latestUserIndex = messages.value.map((item) => item?.role).lastIndexOf('user')
+  return latestUserIndex >= 0 ? messages.value.slice(latestUserIndex + 1) : []
+})
+
+/** 已落库的 assistant metadata 保存 requestId，用于刷新/重进时恢复该轮协作任务。 */
+const currentRequestId = computed(() => {
+  for (let index = currentRequestMessages.value.length - 1; index >= 0; index--) {
+    const requestId = currentRequestMessages.value[index]?._requestId
+    if (requestId) return String(requestId)
+  }
+  return null
+})
+
+/** 当前请求由 SSE 产生的任务 ID 是协作状态栏唯一允许展示的子智能体范围。 */
+const currentRequestSubagentTaskIds = computed(() => {
+  const taskIds = new Set()
+  for (const event of liveSubagentEvents.value) {
+    if (event?.task_id) taskIds.add(String(event.task_id))
+    if (event?.type === 'subagent_batch_start') {
+      for (const task of event.tasks || []) {
+        if (task?.task_id) taskIds.add(String(task.task_id))
+      }
+    }
+  }
+  return [...taskIds]
+})
+
+function startRuntimePanelResize(event) {
+  if (event.button !== undefined && event.button !== 0) return
+  event.preventDefault()
+  stopRuntimePanelResize?.()
+
+  const startX = event.clientX
+  const startWidth = sessionRuntimePanelWidth.value
+  const minWidth = 280
+  const maxWidth = Math.max(minWidth, Math.min(560, window.innerWidth - 440))
+  const onPointerMove = (moveEvent) => {
+    const nextWidth = startWidth + startX - moveEvent.clientX
+    sessionRuntimePanelWidth.value = Math.min(maxWidth, Math.max(minWidth, nextWidth))
+  }
+  const stop = () => {
+    window.removeEventListener('pointermove', onPointerMove)
+    window.removeEventListener('pointerup', stop)
+    document.body.style.userSelect = ''
+    document.body.style.cursor = ''
+    stopRuntimePanelResize = null
+  }
+
+  document.body.style.userSelect = 'none'
+  document.body.style.cursor = 'col-resize'
+  window.addEventListener('pointermove', onPointerMove)
+  window.addEventListener('pointerup', stop, { once: true })
+  stopRuntimePanelResize = stop
+}
+
+const runningSubagentCount = computed(() => {
+  const taskStates = new Map()
+  for (const event of liveSubagentEvents.value) {
+    if (!event?.task_id) continue
+    if (event.type === 'subagent_task_start') taskStates.set(event.task_id, 'running')
+    if (event.type === 'subagent_task_done') taskStates.set(event.task_id, event.status || 'completed')
+    if (event.type === 'subagent_error') taskStates.set(event.task_id, 'failed')
+  }
+  return [...taskStates.values()].filter((status) => status === 'running').length
+})
+
+const streamingSubagentBadges = computed(() => {
+  if (!loading.value && !streaming.value) return []
+  return buildSubagentLiveStatusBadges(liveSubagentEvents.value)
+})
+
+function autoResize() {}
+
+const {
+  agents,
+  agentsLoading,
+  selectedAgentId,
+  currentAgent,
+  chatCapabilities,
+  selectedConfigVersion,
+  selectedAgentVersionId,
+  configVersionOptions,
+  showFileUploadBtn,
+  showVoiceInputBtn,
+  showTtsBtn,
+  fileAcceptTypes,
+  imageAcceptTypes,
+  documentAcceptTypes,
+  fileUploadHint,
+  imageUploadHint,
+  currentWelcomeMessage,
+  currentRecommendedQuestions,
+  currentAgentLoading,
+  handleAgentSelect,
+  onConfigVersionChange,
+  loadAgentConfigVersions,
+  loadCurrentAgent,
+  loadAgents,
+} = useChatAgents({
+  sessionId,
+  loading,
+  pendingAttachments,
+  voiceListening,
+  stopVoiceInput: () => {
+    voiceListening.value = false
+  },
+})
+
+watch(
+  chatInputAreaRef,
+  (area) => {
+    if (area?.inputRef) inputRef.value = area.inputRef
+  },
+  { flush: 'post' }
+)
+
+const { getAttThumbUrl, openAttachmentPreview, onFileSelected, removeAttachment } = useChatAttachments({
+  selectedAgentId,
+  sessionId,
+  chatCapabilities,
+  pendingAttachments,
+  fileInputRef,
+  uploading,
+  attachmentPreviewOpen,
+  attachmentPreviewAtt,
+})
+
+// 后端 TTS 实例与开关（数字人播报 / 消息朗读统一走后端 /api/tts/synthesize）
+const useBackendTtsEnabled = ref(true)
+const backendTts = useBackendTts()
+
+const {
+  toggleVoiceInput,
+  stopVoiceInput,
+  speakMessage,
+  speakText,
+  speaking,
+  messagePlainText,
+  startStreamBroadcast,
+  feedStreamingText,
+  flushStreamBroadcast,
+  stopStreamBroadcast,
+  setBroadcastMuted,
+  cleanup: voiceCleanup,
+} = useVoiceIO({
+  input,
+  inputRef,
+  chatCapabilities,
+  autoResize,
+  voiceListening,
+  speakingMsgKey,
+  // 后端 TTS：数字人播报 / 消息朗读统一走 /api/tts/synthesize（无浏览器语音也能发声）
+  useBackendTts: useBackendTtsEnabled,
+  backendTts,
+})
+
+// ===================== 数字人面板 =====================
+function resolveDigitalHuman(agent) {
+  if (!agent) return null
+  let cfg = agent.config
+  if (typeof cfg === 'string') {
+    try {
+      cfg = JSON.parse(cfg)
+    } catch {
+      return null
+    }
+  }
+  return cfg?.digitalHuman || null
+}
+
+const digitalHumanConfig = computed(() => resolveDigitalHuman(currentAgent.value))
+const isDigitalHumanAgent = computed(() => currentAgent.value?.agentType === 'digital_human')
+const digitalHumanSpeaking = computed(() => isDigitalHumanAgent.value && speaking.value)
+
+// 数字人面板状态：播报中 / 思考中 / 空闲
+const dhMuted = ref(false)
+const digitalHumanState = computed(() => {
+  if (isDigitalHumanAgent.value && speaking.value) return 'speaking'
+  if (isDigitalHumanAgent.value && loading.value) return 'thinking'
+  return 'idle'
+})
+
+function onToggleMute() {
+  dhMuted.value = !dhMuted.value
+  setBroadcastMuted(dhMuted.value)
+}
+
+function onStopBroadcast() {
+  stopStreamBroadcast()
+}
+
+// 数字人面板底部的 TTS 引擎（Provider）运行时切换：当前生效项 + 全部可选项。
+const chatTtsProvider = ref('')
+const chatTtsProviders = ref([])
+async function loadChatTtsProvider() {
+  if (!isDigitalHumanAgent.value) return
+  try {
+    const info = await backendTts.provider()
+    chatTtsProvider.value = info.active || ''
+    chatTtsProviders.value = info.available || []
+  } catch (e) {
+    chatTtsProviders.value = []
+  }
+}
+async function onChatEngineChange(val) {
+  try {
+    const info = await backendTts.setProvider(val)
+    chatTtsProvider.value = info.active || val
+    chatTtsProviders.value = info.available || chatTtsProviders.value
+    message.success('已切换 TTS 引擎：' + info.active)
+  } catch (e) {
+    message.error('切换 TTS 引擎失败：' + (e?.message || e))
+    loadChatTtsProvider()
+  }
+}
+
+// 回复生成结束后，数字人型 agent 补读句末残留文本（主体已在流式过程中逐句播报）。
+// 中止 / 出错 / 敏感拦截的回复不播报。
+function onReplyFinished() {
+  if (!isDigitalHumanAgent.value) return
+  if (userStoppedStream.value) return
+  const last = messages.value[messages.value.length - 1]
+  if (!last || last.role !== 'assistant') return
+  if (last._error || last._sensitiveBlock || last._terminated) return
+  flushStreamBroadcast()
+}
+
+// 流式正文（仅 assistant 且正在生成时）：逐句喂给数字人播报
+const streamingContent = computed(() => {
+  const m = messages.value[messages.value.length - 1]
+  return m && m.role === 'assistant' && m._streaming ? m.content : null
+})
+
+watch(streamingContent, (txt) => {
+  if (txt != null) feedStreamingText(txt)
+})
+
+// streaming 开关：开始→开启数字人播报会话；结束→收尾补读
+watch(streaming, (now, prev) => {
+  if (!prev && now) {
+    startStreamBroadcast(isDigitalHumanAgent.value ? digitalHumanConfig.value?.voice || {} : null)
+  }
+  if (prev && !now) {
+    onReplyFinished()
+  }
+})
+
+// 用户主动停止生成时，立即取消数字人播报
+watch(userStoppedStream, (v) => {
+  if (v) stopStreamBroadcast()
+})
+
+// 切换到数字人 agent（或反之）时，按需刷新 TTS 引擎可选项
+watch(isDigitalHumanAgent, (active) => {
+  if (active) loadChatTtsProvider()
+})
+
+const {
+  sessionTitle,
+  titleEditing,
+  titleEditValue,
+  fileDrawerOpen,
+  fileDrawerLoading,
+  fileTreeRefreshTick,
+  fileStats,
+  fileDrawerLoadedOnce,
+  sessionFilePreviewOpen,
+  sessionFilePreviewTarget,
+  startTitleEdit,
+  confirmTitleEdit,
+  cancelTitleEdit,
+  tooltipPopupContainer,
+  openFileDrawer,
+  onFileDrawerOpened,
+  refreshSessionFiles,
+  onFileTreeRefreshed,
+  onAttachmentPreview,
+  openSessionFilePreviewModal,
+  pollSessionTitle,
+  cleanupPollTitleTimer,
+} = useChatSessionChrome({
+  sessionId,
+  openAttachmentPreview,
+  attachmentPreviewOpen,
+  attachmentPreviewAtt,
+})
+
+const {
+  getMessageFeedbackType,
+  handleMessageFeedback,
+  showDislikeModal,
+  submitDislikeReason,
+  skipDislikeReason,
+  closeDislikeModal,
+  loadBatchFeedbacks,
+  dislikeModalVisible,
+  dislikeReason,
+} = useChatFeedback()
+
+const editingMessageId = ref(null)
+const editContent = ref('')
+
+const { enrichMessagesAttachments, parseMessage, applyStreamDoneMetadata, getMsgMentions } = useChatMessageModel({
+  editingMessageId,
+  messages,
+  sessionTokenCount,
+})
+
+function scrollAfterExpandBridge(msgIndex, expandEl) {
+  scrollAfterExpandBridge.impl?.(msgIndex, expandEl)
+}
+
+const {
+  expandedRefsMap,
+  refsSectionExpandedMap,
+  isReferenceExpanded,
+  toggleReference,
+  isRefsSectionExpanded,
+  toggleRefsSection,
+  toggleReasoningExpand,
+} = useChatRagRefs({ messages, scrollAfterExpand: scrollAfterExpandBridge })
+
+const {
+  isNearBottom,
+  userScrolledUp,
+  virtualizer,
+  onCapabilityHeightChange,
+  scrollToBottom,
+  scrollReasoningToBottom,
+  forceScrollToBottom,
+  scrollAfterExpand,
+  createScrollHandler,
+} = useChatScroll({
+  messages,
+  messagesRef,
+  streaming,
+  getMsgRagRefs,
+  refsSectionExpandedMap,
+})
+
+scrollAfterExpandBridge.impl = scrollAfterExpand
+
+const { askUserModal, isAskUserUnanswered, showAskUserModal, recordAskUserAnswers } = useAskUser({ messages })
+
+let currentStreamingMsg = null
+const streamSmoother = useStreamSmoother({
+  onFlush: (text) => {
+    if (currentStreamingMsg) {
+      clearErrorRetry(currentStreamingMsg)
+      currentStreamingMsg.content += text
+      scrollToBottom()
+    }
+  },
+})
+
+const { handleChatWorkflowStreamEvent, submitWorkflowConfirm, abandonWorkflowConfirm, applyToolMetadata } =
+  createChatWorkflowStreamHandlers({
+    loading,
+    streaming,
+    currentStatus,
+    hasStreamContent,
+    streamSmoother,
+    scrollToBottom,
+    clearErrorRetry,
+    getCurrentStreamingMsg: () => currentStreamingMsg,
+    setCurrentStreamingMsg: (msg) => {
+      currentStreamingMsg = msg
+    },
+    getAbortController: () => abortController.value,
+    setAbortController: (ctrl) => {
+      abortController.value = ctrl
+    },
+    getSelectedAgentId: () => selectedAgentId.value,
+  })
+
+const { handleChatCapabilityStreamEvent } = createChatCapabilityStreamHandlers({
+  currentStatus,
+  hasStreamContent,
+  scrollToBottom,
+  messages,
+  messagesRef,
+  onSubagentEvent: (event) => {
+    liveSubagentEvents.value.push({ ...event })
+    if (liveSubagentEvents.value.length > 600) {
+      liveSubagentEvents.value.splice(0, liveSubagentEvents.value.length - 600)
+    }
+  },
+})
+
+const { canSend, workflowConfirmBlocked } = useChatSendGate({
+  loading,
+  input,
+  pendingAttachments,
+  messages,
+})
+
+const { inputHintQuestions, showInputDisclaimer, questionRotateIndex, applyRecommendedQuestion } = useChatInputHint({
+  messages,
+  currentRecommendedQuestions,
+  selectedAgentId,
+  input,
+  inputRef,
+})
+
+const messageRowComponentRefs = new Map()
+
+function setMessageRowComponentRef(index, el) {
+  if (el) messageRowComponentRefs.set(index, el)
+  else messageRowComponentRefs.delete(index)
+}
+
+function resolveEditInputRefFn() {
+  const eid = editingMessageId.value
+  if (!eid) return null
+  let idx = messages.value.findIndex((m) => m._id === eid)
+  if (idx < 0 && String(eid).startsWith('local-')) {
+    const parsed = parseInt(String(eid).replace('local-', ''), 10)
+    if (!Number.isNaN(parsed) && parsed < messages.value.length) idx = parsed
+  }
+  if (idx < 0) return null
+  return messageRowComponentRefs.get(idx)?.getEditMentionInput?.() ?? null
+}
+
+const streamHolder = {}
+
+const {
+  replyTo,
+  highlightMessageId,
+  rawModal,
+  metadataModal,
+  canRegenerate,
+  isLastUserMessage,
+  startEdit,
+  cancelEdit,
+  startReply,
+  cancelReply,
+  toggleStarMessage,
+  scrollToMessage,
+  submitEdit,
+  copyMessage,
+  copyRequestId,
+  copyMessageId,
+  openRawModal,
+  openMetadataModal,
+  copyRawContent,
+  copyMetadata,
+  handleDeleteMessage,
+  cleanupEditClickOutside,
+} = useChatMessageActions({
+  sessionId,
+  messages,
+  loading,
+  streaming,
+  virtualizer,
+  isNearBottom,
+  userScrolledUp,
+  scrollToBottom,
+  runChatStream: (opts) => streamHolder.runChatStream(opts),
+  inputRef,
+  editingMessageId,
+  editContent,
+  resolveEditInputRefFn,
+})
+
+const { submitAskUserResponse, runChatStream, recoverStreamOnReload, sendMessage, regenerateReply, stopGenerating } = useChatStream({
+  sessionId,
+  messages,
+  messagesRef,
+  loading,
+  streaming,
+  hasStreamContent,
+  currentStatus,
+  reconnecting,
+  lastReplyElapsed,
+  abortController,
+  userStoppedStream,
+  toolEvents,
+  isNearBottom,
+  userScrolledUp,
+  skipNextWatch,
+  input,
+  inputHistory,
+  historyIndex,
+  pendingAttachments,
+  inputRef,
+  replyTo,
+  canSend,
+  workflowConfirmBlocked,
+  selectedAgentId,
+  selectedConfigVersion,
+  selectedAgentVersionId,
+  sessionTokenCount,
+  streamSmoother,
+  getCurrentStreamingMsg: () => currentStreamingMsg,
+  setCurrentStreamingMsg: (msg) => {
+    currentStreamingMsg = msg
+  },
+  scrollToBottom,
+  scrollReasoningToBottom,
+  applyStreamDoneMetadata,
+  loadBatchFeedbacks,
+  pollSessionTitle,
+  isAskUserUnanswered,
+  showAskUserModal,
+  askUserModal,
+  recordAskUserAnswers,
+  cancelReply,
+  autoResize,
+  canRegenerate,
+  getMsgMentions,
+  handleChatWorkflowStreamEvent,
+  handleChatCapabilityStreamEvent,
+  applyToolMetadata,
+})
+
+streamHolder.runChatStream = runChatStream
+
+const { hasMoreMessages, loadingOlder, switchingSession, loadHistory, loadOlderMessages, onStreamingEnded } =
+  useChatHistory({
+    sessionId,
+    messages,
+    streaming,
+    virtualizer,
+    messagesRef,
+    isNearBottom,
+    userScrolledUp,
+    forceScrollToBottom,
+    selectedAgentId,
+    currentAgent,
+    loadAgentConfigVersions,
+    loadCurrentAgent,
+    loadBatchFeedbacks,
+    parseMessage,
+    enrichMessagesAttachments,
+    isAskUserUnanswered,
+    showAskUserModal,
+    cancelReply,
+    loadingHistory,
+    lastReplyElapsed,
+    sessionTokenCount,
+    sessionTitle,
+    input,
+    inputHistory,
+    historyIndex,
+    pendingAttachments,
+    fileDrawerLoadedOnce,
+    sessionFilePreviewTarget,
+    sessionFilePreviewOpen,
+    fileStats,
+    onSessionMissing: () => router.replace({ path: '/app/chat' }),
+  })
+
+/** 回复动画文案：优先展示具体状态（思考/工具/工作流等），无状态时回退为通用生成提示 */
+const streamingIndicatorText = computed(() => currentStatus.value || '正在生成回复...')
+
+/** 输入框加载遮罩：首次加载 Agent 列表 或 切换会话期间 */
+const inputMaskLoading = computed(() => agentsLoading.value || switchingSession.value)
+
+function onRagToggle(index, payload) {
+  const msg = messages.value[index]
+  if (!msg) return
+  if (payload?.kind === 'section') toggleRefsSection(msg)
+  else if (payload?.kind === 'item') toggleReference(msg, payload.refIndex)
+}
+
+function goToKnowledge(knowledgeId, documentId) {
+  const query = documentId ? { docId: String(documentId) } : {}
+  router.push({ path: `/app/knowledge/${knowledgeId}`, query })
+}
+
+function handleChatKeydown(e) {
+  if (e.ctrlKey && e.code === 'Slash') {
+    e.preventDefault()
+    chatInputAreaRef.value?.focusInput?.()
+    return
+  }
+  if (e.key === 'Escape' && streaming.value) {
+    e.preventDefault()
+    stopGenerating()
+  }
+}
+
+function abortActiveStreamOnUnload() {
+  if (streaming.value && abortController.value) {
+    abortController.value.abort()
+    abortController.value = null
+  }
+}
+
+const scrollHandler = createScrollHandler({ loadOlderMessages, hasMoreMessages, loadingOlder })
+
+onMounted(async () => {
+  const queryAgentId = route.query.agentId
+  await loadHistory()
+  // P1：刷新/重进后恢复未完成的流式轮次（重放 SSE 缓冲，拿回已生成内容）
+  await recoverStreamOnReload()
+  await loadAgents(queryAgentId || undefined)
+  if (queryAgentId) {
+    await loadCurrentAgent(queryAgentId)
+    await loadAgentConfigVersions(queryAgentId)
+  } else if (selectedAgentId.value) {
+    await loadAgentConfigVersions(selectedAgentId.value)
+  }
+  if (messagesRef.value) {
+    messagesRef.value.addEventListener('scroll', scrollHandler)
+  }
+  document.addEventListener('keydown', handleChatKeydown)
+  window.addEventListener('beforeunload', abortActiveStreamOnUnload)
+  // 数字人 agent 时加载 TTS 引擎可选项，供面板底部实时切换
+  loadChatTtsProvider()
+})
+
+onUnmounted(() => {
+  stopRuntimePanelResize?.()
+  abortActiveStreamOnUnload()
+  stopStreamBroadcast()
+  voiceCleanup()
+  cleanupPollTitleTimer()
+  cleanupEditClickOutside()
+  if (messagesRef.value) {
+    messagesRef.value.removeEventListener('scroll', scrollHandler)
+  }
+  document.removeEventListener('keydown', handleChatKeydown)
+  window.removeEventListener('beforeunload', abortActiveStreamOnUnload)
+})
+
+watch(
+  () => route.params.sessionId,
+  async (newVal) => {
+    if (skipNextWatch.value) {
+      skipNextWatch.value = false
+      return
+    }
+    if (streaming.value && abortController.value) {
+      userStoppedStream.value = true
+      abortController.value.abort()
+      abortController.value = null
+    }
+    stopStreamBroadcast()
+    expandedRefsMap.value = new Map()
+    refsSectionExpandedMap.value = new Map()
+    liveSubagentEvents.value = []
+    currentRequestStartIndex.value = null
+    messageRowComponentRefs.clear()
+    // 离开会话到「无 sessionId 的聊天页」（如新建会话）：清空残留消息与状态，
+    // 但不触发续流恢复（无 session 可恢复，且避免双恢复竞态）；流式进行中时 loadHistory
+    // 会标记 pendingHistoryReload，待流结束后由 onStreamingEnded 再清空，无需此处特殊处理
+    if (!newVal) {
+      await loadHistory()
+      return
+    }
+    await loadHistory()
+    // P1：切回有在途流式请求的会话时同样恢复
+    await recoverStreamOnReload()
+  }
+)
+
+watch(streaming, onStreamingEnded)
+
+watch(
+  loading,
+  (isLoading, wasLoading) => {
+    if (isLoading && !wasLoading) {
+      // 每次发起新请求都丢弃本会话上一轮的任务事件，防止协作状态混入历史子智能体。
+      currentRequestStartIndex.value = messages.value.length
+      liveSubagentEvents.value = []
+    }
+  },
+  { flush: 'sync' }
+)
+
+watch(selectedAgentId, (newId) => {
+  if (newId && !sessionId.value) {
+    loadCurrentAgent(newId)
+  } else if (!newId) {
+    currentAgent.value = null
+  }
+})
+
+watch(sessionId, (newVal, oldVal) => {
+  if (!newVal && oldVal) loadAgents()
+})
+</script>
+
+<style scoped>
+.chat-container {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: var(--color-canvas);
+}
+
+.chat-workspace {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+}
+
+.chat-primary {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+}
+
+.chat-digital-human {
+  flex: 1 1 40%;
+  min-width: 340px;
+  max-width: 560px;
+  margin: 12px 12px 12px 0;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid var(--color-border, #2a3348);
+  background: #0d1322;
+}
+
+.chat-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px 0;
+  /* 禁用滚动锚定：能力块展开时浏览器会为保持锚点不动而调整 scrollTop，
+     导致块在视口上半时向上展开、下半时向下展开。关闭后统一从上往下展开 */
+  overflow-anchor: none;
+}
+
+.history-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 80px 0;
+}
+
+.history-loading-icon {
+  font-size: 24px;
+  color: var(--color-mute);
+}
+
+.virtual-list-container {
+  width: 100%;
+  max-width: 800px;
+  margin: 0 auto;
+}
+</style>
+
+<style>
+.chat-upload-tooltip .chat-upload-hint {
+  display: block;
+  white-space: pre-line;
+  line-height: 1.5;
+}
+</style>

@@ -1,0 +1,75 @@
+[project]
+name = "lengbot-py"
+version = "0.1.0"
+description = "lengbot 的 Python 学习版重写：message 表为事实来源，LangGraph 仅作执行引擎"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi==0.135.2",
+    "uvicorn[standard]>=0.35",
+    "pydantic>=2.9,<3",
+    "pydantic-settings>=2.6",
+    "sqlalchemy[asyncio]>=2.0.36",
+    "asyncpg>=0.30",
+    "python-multipart>=0.0.12",
+    "httpx>=0.28.1",
+    "tzdata>=2026.5",
+    "langchain==1.3.18",
+    "langchain-openai>=1.7.2",
+    "langgraph==1.2.12",
+    "langgraph-checkpoint-postgres==3.1.2",
+    "psycopg[binary,pool]>=3.3.6",
+    "pymupdf>=2.0",
+    "pillow>=13.0.0",
+    "rapidocr-onnxruntime>=1.4.4",
+    "minio>=7.2.20",
+    "beautifulsoup4>=4.15.0",
+    "lxml>=6.1.3",
+    "python-docx>=1.2.0",
+    "openpyxl>=3.1.5",
+    "python-pptx>=1.0.2",
+    "neo4j>=6.4.1",
+    # Skill 的 SKILL.md frontmatter 解析（Java 用 SnakeYAML）
+    "pyyaml>=6.0",
+    "bcrypt>=5.0.0",
+    "redis>=8.1.0",
+]
+
+# 阶段 1 起逐步启用（版本取自 SurfSense 已验证环境）
+# "langchain==1.3.18",
+# "langchain-core==1.6.4",
+# "langgraph==1.2.12",
+# "langgraph-checkpoint-postgres==3.1.2",
+# "deepagents==0.4.12",
+# "sse-starlette>=2.1",
+
+[dependency-groups]
+dev = [
+    "ruff>=0.7",
+    "mypy>=1.13",
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+]
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+
+[[tool.uv.index]]
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+default = true
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "ASYNC"]
+# UP046 建议把 `class Result(BaseModel, Generic[T])` 改成 PEP 695 的 `class Result[T]`。
+# 不改：Pydantic v2 对 PEP 695 泛型语法的支持还不完整（尤其是 response_model 里的
+# 嵌套泛型推断），改了有运行期风险。等 Pydantic 明确支持再说。
+ignore = ["UP046"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+plugins = ["pydantic.mypy"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
